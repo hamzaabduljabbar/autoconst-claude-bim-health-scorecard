@@ -1,0 +1,106 @@
+# =============================================================================
+# BIM Health Scorecard — Rulebook  (UK profile, v1)
+# =============================================================================
+# Same engine as the US profile; swaps the naming + classification rules for the
+# UK/ISO 19650 + Uniclass 2015 world. Parameter/geometry/worksharing rules are
+# shared with rules.us.yaml. Set profile: UK to activate.
+#
+# Sourcing note (see ../VERIFICATION.md): the ISO 19650 naming regex and status/
+# revision codes are Tier 2 (from published guidance, not the paywalled ISO
+# text). Uniclass codes are Tier 1 (cross-referenced in the LOD Spec 2024 and
+# rules/tables/classification_map.md).
+# =============================================================================
+
+profile: UK
+version: 1
+classification_system: uniclass_2015     # vs omniclass in the US profile
+stage: design
+
+# -----------------------------------------------------------------------------
+# NAMING  (ISO 19650-2 Annex A)
+# -----------------------------------------------------------------------------
+naming:
+  - id: N-UK-01
+    name: File name follows ISO 19650 7-field pattern
+    severity: fail
+    weight: 3
+    autofix: false
+    check: filename_pattern
+    # Project_Originator_Volume_Level_Type_Role_Number[_Suitability_Revision]
+    pattern: '^[A-Z0-9-]{2,10}_[A-Z0-9]{3,6}_[A-Z0-9]{1,2}_[A-Z0-9]{2}_[A-Z]{2}_[A-Z]{2}_[0-9]{4,6}(_[SAB][0-9])?(_[PC][0-9]{2}(\.[0-9]{2})?)?$'
+    source: ISO 19650-2 Annex A / UK BIM Framework
+
+  - id: N-UK-02
+    name: Status/suitability code present and in allowed set
+    severity: fail
+    weight: 2
+    autofix: false
+    check: value_in_set
+    allowed: [S0, S1, S2, S3, S4, S6, S7, A1, A2, A3, B1, B2]
+    source: BS EN ISO 19650-2 National Annex A
+
+  - id: N-UK-03
+    name: Revision code follows P##.## (WIP) or C##.## (published)
+    severity: warn
+    weight: 1
+    autofix: false
+    check: value_pattern
+    pattern: '^[PC][0-9]{2}(\.[0-9]{2})?$'
+    source: UK BIM Framework Guidance C
+
+  - id: N-UK-04
+    name: Role field uses a valid Uniclass 2015 Roles code
+    severity: warn
+    weight: 1
+    autofix: false
+    check: value_in_table
+    table: uniclass_roles
+    source: Uniclass 2015 Roles table
+
+  - id: N-01
+    name: Family names clean + unique
+    severity: fail
+    weight: 2
+    autofix: assist
+    check: family_name_unique_and_clean
+    source: shared with US profile
+
+# -----------------------------------------------------------------------------
+# CLASSIFICATION  (Uniclass 2015 instead of OmniClass)
+# -----------------------------------------------------------------------------
+classification:
+  - id: C-UK-01
+    name: Element has a Uniclass 2015 classification code
+    severity: fail
+    weight: 3
+    autofix: assist            # Uniclass usually held in a shared param (writable)
+    check: param_not_empty
+    # common Revit shared params for Uniclass; adjust to the project's binding
+    params: [Classification.Uniclass.Ss.Number, Classification.Uniclass.Pr.Number]
+    match: any                 # pass if either the system (Ss) or product (Pr) code is set
+    source: Uniclass 2015 / UK BIM Framework
+
+  - id: C-UK-02
+    name: Uniclass code format valid (e.g. Ss_25_30_20 / Pr_20_85)
+    severity: warn
+    weight: 1
+    autofix: false
+    check: value_pattern
+    pattern: '^(Ss|Pr|EF|SL|Ro)(_[0-9]{2}){2,4}$'
+    source: Uniclass 2015 table structure
+
+  # System families still fall back to Uniformat Assembly Code if present
+  - id: C-04
+    name: Uniformat Assembly Code populated (cross-reference)
+    severity: info
+    weight: 1
+    autofix: true
+    check: param_not_empty
+    params: [Assembly Code]
+    source: shared with US profile
+
+# -----------------------------------------------------------------------------
+# Parameters / Geometry / Worksharing: inherited from rules.us.yaml
+#   (COBie is used in the UK too — BS 1192-4. LOD/geometry rules are identical.)
+# -----------------------------------------------------------------------------
+inherit: [parameters, geometry, worksharing]

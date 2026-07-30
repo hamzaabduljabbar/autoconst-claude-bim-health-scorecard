@@ -1,0 +1,491 @@
+# =============================================================================
+# BIM Health Scorecard — Rulebook  (US profile, v1)
+# =============================================================================
+# Reads a live Revit model via the Revit MCP and scores it 0-100 across five
+# categories, then rolls up to an overall letter grade. Every rule maps to a
+# source in bim-scorecard-research.md.
+#
+# How this file is used:
+#   - Each rule has an id, category, severity, weight, threshold, and an
+#     `autofix` flag saying whether the tool can repair it directly in Revit.
+#   - Category score = 100 * (weighted rules passed / weighted rules applicable)
+#   - Overall = weighted mean of category scores (see `scoring` block).
+#   - Clients override thresholds/weights per BEP in rules.custom.yaml — this
+#     file is the shipped default and is never edited per project.
+#
+# severity:  fail  = counts hard against the score
+#            warn  = counts at half weight
+#            info  = listed in report, does not affect score
+# autofix:   true  = tool can write the fix back to Revit (set param, rename)
+#            assist= tool proposes the value, human approves before write
+#            false = human must fix manually (geometry, modeling decisions)
+# =============================================================================
+
+profile: US
+version: 1
+classification_system: omniclass        # UK profile swaps to uniclass_2015
+
+# --- Rule profiles / stage (locked v1) ------------------------------------
+# `stage` selects which severity a stage-based rule uses. Design stage is the
+# default and is forgiving (member marks, fire ratings etc. may be blank).
+# A fabrication/handover BEP sets stage: fabrication (or overrides per-rule in
+# rules.custom.yaml) to make those hard requirements.
+stage: design                           # design | fabrication
+
+# Rule fields the engine must honor:
+#   severity_by_stage: {design: X, fabrication: Y}  -> pick severity by `stage`
+#   na_allowed: true  -> a blank value is acceptable; never counts as a failure,
+#                        reported only as info coverage. (e.g. Fire Rating on a
+#                        non-rated door, Type Mark at design stage.)
+# Severity meaning for scoring: fail = full weight against score; warn = half
+#   weight; info = listed only, excluded from the score.
+
+# --- Engine conventions VERIFIED against Snowdon Towers sample model ---
+conventions:
+  # A param can live on the instance or the type. Checks must look in the right
+  # scope or they raise false failures. Default assumed: instance.
+  # Type-level params seen: OmniClass Number, Assembly Code, Type Mark,
+  #   Fire Rating, Width, Height, Function (doors/walls), Manufacturer, Model,
+  #   Description, Cost, Keynote.
+  # Instance-level: Mark, Occupancy, Department, Structural, Name, Number, Area.
+  default_param_scope: instance
+  # "not empty" MUST treat both None and "" (empty string) as empty —
+  #   e.g. Occupancy came back as "" on placed rooms in the sample model.
+  empty_values: [null, ""]
+  # CAD imports: FilteredElementCollector(ImportInstance) returns links AND
+  #   imports; count only those with IsLinked == False as true imports.
+  # --- Write / auto-fix constraints (VERIFIED against the Revit MCP) ---
+  # The execute_revit_code endpoint AUTO-WRAPS each call in its own Revit
+  #   transaction and commits it. You CANNOT start a nested Transaction and
+  #   CANNOT roll back -> every param write PERSISTS immediately. For a safe
+  #   dry-run, write then restore the original value in the same call.
+  # "OmniClass Number" is READ-ONLY via LookupParameter().Set() -> it is NOT
+  #   auto-fixable by a param write; it must be set through the family's
+  #   classification. Treat OmniClass autofix as false/manual.
+  # "Assembly Code" (Uniformat) IS writable -> preferred auto-fixable US
+  #   classification, and the one estimators actually use for cost.
+  # Classification is CATEGORY-AWARE: loadable families (Doors, Windows, MEP,
+  #   Furniture, Casework, Plumbing/Lighting Fixtures) carry OmniClass; system
+  #   families (Walls, Floors, Roofs, Ceilings) do NOT and are classified by
+  #   Assembly Code. Do not flag system families for missing OmniClass.
+  # A blank Fire Rating on a non-fire-rated door is acceptable (N/A), not a
+  #   defect -> parameter rules need an "N/A allowed" escape, not just present.
+
+scoring:
+  grade_bands:                            # overall score -> letter
+    A: 90
+    B: 80
+    C: 70
+    D: 60
+    F: 0
+  category_weights:                       # must sum to 1.0
+    naming: 0.15
+    parameters: 0.35                      # heaviest — this is what downstream QTO/FM needs
+    classification: 0.20
+    geometry: 0.20
+    worksharing: 0.10
+
+# -----------------------------------------------------------------------------
+# 1. NAMING
+# -----------------------------------------------------------------------------
+naming:
+  - id: N-01
+    name: Family names free of illegal chars and duplicates
+    severity: fail
+    weight: 2
+    autofix: assist
+    check: family_name_unique_and_clean
+    illegal_chars: '[\\/:*?"<>|{}]'
+    source: Ideate family-auditing
+
+  - id: N-02
+    name: View names follow browser-org convention (Discipline_Phase_Purpose)
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: view_name_pattern
+    pattern: '^[A-Z]{2,4}_.+'
+    source: Novedge template audit
+
+  - id: N-03
+    name: Level naming standard (L01, L02, ...)
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: level_name_pattern
+    pattern: '^L[0-9]{2}$'
+    source: Novedge
+
+  - id: N-04
+    name: Sheet numbers match originator sheet-naming standard
+    severity: warn
+    weight: 1
+    autofix: false
+    check: sheet_number_pattern
+    pattern: '^[A-Z]{1,2}-?[0-9]{3}$'   # e.g. A-101, S101 — tune per BEP
+    source: Novedge
+
+  - id: N-05
+    name: Materials named consistently, no duplicates
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: material_name_unique
+    source: Novedge
+
+# -----------------------------------------------------------------------------
+# 2. PARAMETERS  (highest-weight category — feeds QTO, cost, FM handover)
+# -----------------------------------------------------------------------------
+parameters:
+  # --- COBie-scope core ---
+  - id: P-01
+    name: Every COBie-scope element has Name + Description
+    severity: fail
+    weight: 3
+    autofix: false
+    check: param_not_empty
+    params: [Mark, Description]
+    source: Cxalloy / NIBS COBie
+
+  - id: P-02
+    name: COBie Type has Category (Omniclass) set
+    severity: fail
+    weight: 3
+    autofix: assist
+    check: param_not_empty
+    params: [OmniClass Number]
+    source: Cxalloy
+
+  - id: P-03
+    name: Component assigned to a Space/Room
+    severity: fail
+    weight: 2
+    autofix: false
+    check: element_in_room
+    source: Cxalloy / WBDG
+
+  - id: P-04
+    name: MEP equipment has Manufacturer + Model (LOD >= 350)
+    severity: fail
+    weight: 2
+    autofix: false
+    check: param_not_empty
+    categories: [MechanicalEquipment, PlumbingFixtures, ElectricalEquipment]
+    params: [Manufacturer, Model]
+    applies_at_lod: 350
+    source: Cxalloy / BIMForum 2024
+
+  - id: P-05
+    name: MEP equipment connected to a System
+    severity: warn
+    weight: 1
+    autofix: false
+    check: element_has_system
+    categories: [MechanicalEquipment, DuctSystem, PipingSystem]
+    source: Cxalloy
+
+  # --- Category-specific required params ---
+  - id: P-06
+    name: Doors have Type Mark, Fire Rating, Width, Height
+    severity: fail
+    weight: 2
+    autofix: assist
+    check: param_not_empty
+    param_scope: type             # VERIFIED: type params on doors
+    categories: [Doors]
+    params: [Type Mark, Width, Height]   # Fire Rating moved to P-06b (na_allowed)
+    source: BIMForum 2024 / Pset_DoorCommon
+
+  - id: P-06b
+    name: Door Fire Rating coverage (advisory)
+    severity: info                # blank is acceptable on non-fire-rated doors
+    na_allowed: true
+    weight: 1
+    autofix: false
+    check: param_not_empty
+    param_scope: type
+    categories: [Doors]
+    params: [Fire Rating]
+    source: BIMForum 2024 / verified in sample model
+
+  - id: P-07
+    name: Windows have Type Mark, Width, Height, U-value
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: param_not_empty
+    categories: [Windows]
+    params: [Type Mark, Width, Height, Analytic Construction]
+    source: BIMForum 2024 / Pset_WindowCommon
+
+  - id: P-08
+    name: Walls have Function, Fire Rating, Structural flag
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: param_not_empty
+    # VERIFIED mixed scope: Function + Fire Rating are TYPE params;
+    #   Structural is an INSTANCE param on walls. Engine must resolve per-param.
+    params_type: [Function, Fire Rating]
+    params_instance: [Structural]
+    categories: [Walls]
+    source: BIMForum 2024 / Pset_WallCommon
+
+  - id: P-09
+    name: Structural framing/columns have Structural Material
+    severity: fail
+    weight: 2
+    autofix: false
+    check: param_not_empty
+    categories: [StructuralFraming, StructuralColumns]
+    params: [Structural Material]      # VERIFIED populated on Snowdon Structural
+    source: BIMForum 2024
+
+  - id: P-09m
+    name: Structural members have a Type Mark (fabrication ID)
+    # STAGE-BASED (Tier-3 call): advisory at design stage, required for
+    # fabrication. Default = advisory. Fabrication BEP flips severity to 'fail'
+    # via rules.custom.yaml (stage: fabrication).
+    severity: info                     # design-stage default
+    severity_by_stage: {design: info, fabrication: fail}
+    weight: 2
+    autofix: false
+    check: param_not_empty
+    na_allowed: true                   # blank is acceptable at design stage
+    categories: [StructuralFraming, StructuralColumns]
+    params: [Type Mark]                # VERIFIED blank on 942 framing + 74 cols
+    source: BIMForum 2024 / verified in sample model
+
+  # --- Rooms / Spaces ---
+  - id: P-10
+    name: Every Room has Name + Number + Occupancy
+    severity: fail
+    weight: 2
+    autofix: false
+    check: param_not_empty
+    categories: [Rooms]
+    params: [Name, Number, Occupancy]
+    source: WBDG COBie
+
+  - id: P-11
+    name: Every Room assigned to a Level and area > 0
+    severity: fail
+    weight: 2
+    autofix: false
+    check: room_placed_and_area_positive
+    source: WBDG COBie
+
+  # --- Sheets / titleblocks ---
+  - id: P-12
+    name: Titleblock params populated (Number, Name, Drawn/Checked, Issue Date, Revision)
+    severity: warn
+    weight: 1
+    autofix: assist
+    check: param_not_empty
+    categories: [Sheets]
+    params: [Sheet Number, Sheet Name, Drawn By, Checked By, Sheet Issue Date]
+    source: Novedge
+
+  - id: P-13
+    name: Shared parameters bound from a single versioned SP file
+    severity: info
+    weight: 1
+    autofix: false
+    check: shared_param_file_single
+    source: Novedge
+
+# -----------------------------------------------------------------------------
+# 3. CLASSIFICATION  (US = Omniclass; UK profile swaps to Uniclass 2015)
+# -----------------------------------------------------------------------------
+classification:
+  - id: C-01
+    name: Loadable-family element has an OmniClass code assigned
+    severity: fail
+    weight: 3
+    autofix: false                # VERIFIED: OmniClass Number is READ-ONLY via param write;
+                                  #   must be set through the family's classification, not here
+    check: param_not_empty
+    param_scope: type
+    applies_to_family_kind: loadable   # NOT system families (walls/floors/roofs/ceilings)
+    params: [OmniClass Number]
+    source: USACE M3 / DDC
+
+  - id: C-02
+    name: OmniClass code valid (dot-separated table code)
+    severity: fail
+    weight: 2
+    autofix: false                # same read-only constraint as C-01
+    check: code_valid_against_table
+    param_scope: type
+    applies_to_family_kind: loadable
+    table: omniclass_23           # products table; ref file in rules/tables/
+    # VERIFIED against Snowdon model: codes are DOT-separated, e.g. "23.30.10.00"
+    pattern: '^[0-9]{2}(\.[0-9]{2})+$'
+    source: Solibri COBie-US
+
+  - id: C-04
+    name: Uniformat Assembly Code populated (US elemental-cost classification)
+    severity: warn
+    weight: 2                      # bumped: this is the writable, auto-fixable, estimator-facing code
+    autofix: true                 # VERIFIED writable (e.g. "B2030200"); safe to batch-fill on approval
+    check: param_not_empty
+    param_scope: type
+    params: [Assembly Code]
+    source: ASTM Uniformat II / verified in sample model
+
+  - id: C-03
+    name: Spaces carry a space/occupancy classification (US fed: SEPS/space code)
+    severity: warn
+    weight: 1
+    autofix: false
+    check: param_not_empty
+    categories: [Rooms]
+    params: [Department]
+    source: VA BIM / GSA spatial validation
+
+# -----------------------------------------------------------------------------
+# 4. GEOMETRY / MODEL HYGIENE  (mostly not autofixable — modeling decisions)
+# -----------------------------------------------------------------------------
+geometry:
+  - id: G-01
+    name: Revit warnings count
+    severity: fail
+    weight: 3
+    autofix: false
+    check: warnings_count
+    threshold: {target: 0, warn_above: 100, fail_above: 1000}
+    source: Novedge / Man&Machine (practitioner thresholds)
+
+  - id: G-02
+    name: In-place families count
+    severity: fail
+    weight: 2
+    autofix: false
+    check: inplace_family_count
+    threshold: {target: 0, warn_above: 10}
+    source: Ideate
+
+  - id: G-03
+    name: Imported (not linked) CAD count
+    severity: fail
+    weight: 2
+    autofix: false
+    check: imported_cad_count
+    threshold: {target: 0}
+    source: Novedge CAD
+
+  - id: G-04
+    name: Duplicate Mark values within category
+    severity: fail
+    weight: 2
+    autofix: assist
+    check: duplicate_marks
+    threshold: {target: 0}
+    source: Ideate warnings
+
+  - id: G-05
+    name: Unplaced / not-enclosed / redundant rooms
+    severity: fail
+    weight: 2
+    autofix: false
+    check: unplaced_rooms
+    threshold: {target: 0}
+    source: Novedge
+
+  - id: G-06
+    name: Purgeable elements remaining (after intended 2x purge)
+    severity: warn
+    weight: 1
+    autofix: true                 # purge is safe to automate
+    check: purgeable_count
+    threshold: {target: 0}
+    source: Novedge / Autodesk KB
+
+  - id: G-07
+    name: Views not placed on any sheet
+    severity: info
+    weight: 1
+    autofix: false
+    check: views_not_on_sheets
+    source: Novedge
+
+  - id: G-08
+    name: Model file size
+    severity: warn
+    weight: 1
+    autofix: false
+    check: file_size_mb
+    threshold: {warn_above: 300, fail_above: 1000}
+    source: Xpressrendering (no official Autodesk cap)
+
+  - id: G-09
+    name: Oversized family files
+    severity: warn
+    weight: 1
+    autofix: false
+    check: family_size_mb
+    threshold: {warn_above: 1, fail_above: 3}
+    source: Xpressrendering
+
+  - id: G-10
+    name: Stray elements far outside project bounding box
+    severity: warn
+    weight: 1
+    autofix: false
+    check: elements_outside_envelope
+    threshold: {target: 0}
+    source: Solibri
+
+# -----------------------------------------------------------------------------
+# 5. WORKSHARING / ORGANIZATION
+# -----------------------------------------------------------------------------
+worksharing:
+  - id: W-01
+    name: Worksharing enabled; worksets organized by discipline
+    severity: warn
+    weight: 2
+    autofix: false
+    check: worksets_present
+    source: Novedge
+
+  - id: W-02
+    name: No unused / obsolete worksets
+    severity: warn
+    weight: 1
+    autofix: false
+    check: unused_worksets
+    threshold: {target: 0}
+    source: Evolve
+
+  - id: W-03
+    name: Project Base Point / Survey Point at defaults or documented offset
+    severity: warn
+    weight: 2
+    autofix: false
+    check: coordinates_documented
+    source: Novedge / USACE
+
+  - id: W-04
+    name: Coordinate system + zone + datum defined (US fed requirement)
+    severity: warn
+    weight: 1
+    autofix: false
+    check: coordinate_system_defined
+    source: USACE M3
+
+  - id: W-05
+    name: View templates cover plans/elevations/sections/3D/sheets
+    severity: info
+    weight: 1
+    autofix: false
+    check: view_templates_coverage
+    source: Novedge
+
+  - id: W-06
+    name: Design options = 0 unless BEP allows
+    severity: info
+    weight: 1
+    autofix: false
+    check: design_option_count
+    threshold: {target: 0}
+    source: Novedge

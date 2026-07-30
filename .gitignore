@@ -1,0 +1,10 @@
+outputs/*.xlsx
+outputs/*.json
+outputs/_ac_shared_params.txt
+!outputs/.gitkeep
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+Thumbs.db
