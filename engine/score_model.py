@@ -36,8 +36,12 @@ def pget(elem, name):
     if p is None:
         return None
     try:
-        v = p.AsValueString()
-        return v if v is not None else p.AsString()
+        v = p.AsString()
+        if v is None or v == "":
+            vs = p.AsValueString()
+            if vs is not None and vs != "":
+                v = vs
+        return v
     except:
         return None
 
