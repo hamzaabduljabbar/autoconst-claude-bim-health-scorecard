@@ -27,7 +27,13 @@ Audits the Revit model currently open in Revit, scores it across five weighted c
 2. It fills blank `Assembly Code` on element TYPES only, deriving fill value from each category's own most-common existing code (fallback to Uniformat Level-3 default). Never overwrites existing values.
 3. Re-run mode A. Show the user the before/after grade delta.
 
-### C) Stage / profile switching
+### C) Color-splash failing elements in Revit (the visual demo)
+1. Make sure mode A has run (JSON exists at `<repo>/outputs/scorecard_data.json`).
+2. Read `engine/color_splash_failures.py` (leave `CLEAR = False`). Send via `execute_revit_code`.
+3. It paints failing elements in the active view: **red** = fail, **orange** = warn, **yellow** = info/advisory. User can rotate/pan/zoom in Revit to see the problems visually.
+4. To wipe the overrides, run the same script with `CLEAR = True`.
+
+### D) Stage / profile switching
 - Fabrication stage: set `STAGE = "fabrication"` before running mode A. Structural Type Marks then count against the grade.
 - Operations stage: `STAGE = "operations"`. MEP Manufacturer/Model becomes required.
 - UK profile: swap to `rules/rules.uk.yaml` semantics (ISO 19650 naming, Uniclass 2015). The UK rulebook is descriptive; the engine's category-aware Classification logic still applies — swap `OmniClass Number` checks for `Classification.Uniclass.Ss.Number` / `Pr.Number`.
