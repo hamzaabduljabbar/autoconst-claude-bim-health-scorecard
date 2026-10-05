@@ -6,6 +6,7 @@
 # Run via mcp__revit__execute_revit_code AFTER the scorecard has run.
 # Undo with the color reset (mcp__revit__clear_colors) or run this with CLEAR = True.
 import json
+import System
 from pyrevit import revit, DB
 doc = revit.doc
 
@@ -37,8 +38,12 @@ else:
         data = json.load(f)
     counts = {"fail": 0, "warn": 0, "info": 0}
     for rule in data["rules"]:
-        sev = rule["sev"]
+        # AutoConst tool JSON uses severity/failing; legacy v1.3 JSON uses sev/fails
+        if not rule.get("applicable", True): continue
+        sev = rule.get("severity", rule.get("sev"))
         if sev not in COLORS: continue
+        fails = ([(f["id"], f["reason"]) for f in rule["failing"]]
+                 if "failing" in rule else rule["fails"])
         ogs = DB.OverrideGraphicSettings()
         ogs.SetProjectionLineColor(COLORS[sev])
         ogs.SetSurfaceForegroundPatternColor(COLORS[sev])
@@ -46,10 +51,10 @@ else:
         for p in DB.FilteredElementCollector(doc).OfClass(DB.FillPatternElement):
             if p.GetFillPattern().IsSolidFill:
                 ogs.SetSurfaceForegroundPatternId(p.Id); break
-        for eid, _issue in rule["fails"]:
+        for eid, _issue in fails:
             if eid == 0: continue
             try:
-                view.SetElementOverrides(DB.ElementId(eid), ogs)
+                view.SetElementOverrides(DB.ElementId(System.Int64(eid)), ogs)
                 counts[sev] += 1
             except: pass
     print("colored: %d red (fail), %d orange (warn), %d yellow (info)" %
