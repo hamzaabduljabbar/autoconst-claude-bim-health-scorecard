@@ -11,8 +11,10 @@ writes a formatted `.xlsx`, and can fill blank Uniformat (Assembly Code) codes b
 
 ## Prerequisites
 1. Revit is running with a project open; pyRevit Routes on `localhost:48884`.
-2. AutoConst Revit MCP is connected (`mcp__revit__bim_health_audit` / `mcp__revit__bim_health_fix` available).
-   If those tools are missing, the MCP is an older version: tell the user, don't fall back silently.
+2. A Revit MCP is connected. **Preferred:** AutoConst Revit MCP, which provides
+   `mcp__revit__bim_health_audit` / `mcp__revit__bim_health_fix`. If those two tools are not
+   available (any other Revit MCP with `execute_revit_code`), use **section F (fallback)** instead
+   of A and B, and tell the user the native tools would be faster and repeatable.
 3. The scorecard repo is cloned: `C:\Users\Hamza\autoconst-claude-bim-health-scorecard`
    (else Glob for `autoconst-claude-bim-health-scorecard` under the user's home).
 4. Host Python + openpyxl (`py -m pip install openpyxl` if missing).
@@ -63,6 +65,17 @@ Furniture. Doors and system families (walls/floors/roofs/ceilings, rule C-05) ar
   mean over categories that have scoring rules; A≥90 B≥80 C≥70 D≥60 F<60.
 - Snowdon Towers Sample Architectural reference scores (unfixed): design 85.15 B, fabrication 80.41 B,
   operations 76.78 C. After mode B: design 85.77 B.
+
+## F) Fallback — Revit MCP without the native health tools
+Same engine v1.3, run as a script through `execute_revit_code` (auto-commits each call).
+1. Score: read `engine/score_model.py`; send it via `mcp__revit__execute_revit_code`, replacing the
+   final `print(...)` block with code that writes the results as JSON
+   (`model`, `stage`, `overall`, `grade`, `category_scores` as {cat: {score, grade, weight}},
+   `rules` with keys `cat,id,name,src,sev,na,passrate,fails`) to `<repo>/outputs/scorecard_data.json`.
+   Set `STAGE` as needed. Then run `py <repo>/engine/build_scorecard.py` (no `--fetch`).
+2. Fix: read `engine/autofix_assembly_code.py`; run once with `APPLY = False` (dry run) and show the
+   user the targets; only after a clear yes, run with `APPLY = True`. No stale-plan protection here —
+   don't let the model change between the two runs. Ctrl+Z reverts.
 
 ## Source-citation policy
 Every rule carries a `source` (LOD <code>, LOD/OC21, LOD/Uniformat, COBie Type/Space, practitioner),
